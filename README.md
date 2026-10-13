@@ -5,8 +5,8 @@ tests) → review loop, using any OpenAI-compatible LLM endpoint. This repositor
 release binaries; the source is private.
 
 > **For coding agents:** this README is written so you can install and configure hx end to end
-> without asking the user anything except (1) which LLM provider and API key to use and (2) which
-> models they want. Follow the steps in order. Every step has a check; do not move on until it
+> without asking the user anything except (1) whether they use subscriptions (Claude, ChatGPT,
+> Google — Path A, recommended) or an API key (Path B), and (2) the browser logins or the key. Follow the steps in order. Every step has a check; do not move on until it
 > passes. Do not print API keys.
 
 ## 1. Pick the right binary
@@ -90,7 +90,7 @@ hx version     # → "hx version X.Y.Z", commit, target
 | Tool | Needed? |
 |---|---|
 | `git` | **Yes, in practice.** Without a git repo the reviewer gets no diff. Run hx inside a git repository. |
-| An OpenAI-compatible LLM endpoint + key | **Yes.** See step 5. |
+| An OpenAI-compatible LLM endpoint | **Yes.** CLIProxyAPI with your subscriptions (recommended) or a provider API key — step 5. |
 | [ai-jail](https://github.com/akitaonrails/ai-jail) (bubblewrap, Linux only) | Optional: sandboxes the agent's shell. Without it hx runs commands directly on the machine (`backend = "local"`). |
 | Docker | Only for `backend = "container"`. |
 | `gh` (GitHub CLI) | Only for `hx pr`, `hx run --issue/--pr`, `hx fix-ci`, `hx review --pr`. |
@@ -114,14 +114,91 @@ says `nenhuma pilha detectada`, you must declare gates yourself (step 5).
 
 Messages from hx are in Brazilian Portuguese; the meaning of the important ones is given below.
 
-## 5. Configure `.hx/config.toml`
+## 5. Connect the models
 
-**The generated config points at the author's private setup** (`base_url` defaults to
-`http://127.0.0.1:8317/v1`, key variable `HX_PROXY_KEY`, model names like `claude-sonnet-5-5`,
-`gpt-5.6-terra`). You must replace all of that. Edit `.hx/config.toml` — change the existing
-tables instead of adding duplicates (a TOML table may appear only once).
+hx talks to one OpenAI-compatible endpoint. Pick a path:
 
-### 5.1 Endpoint and key
+- **Path A (recommended): your subscriptions through CLIProxyAPI.** No provider API keys to paste;
+  you log in once per subscription (Claude Pro/Max, ChatGPT/Codex, Google Antigravity) and the proxy
+  refreshes the tokens. hx's generated config already targets this proxy and its model names, so
+  **no `.hx/config.toml` change is needed**. Do 5A, then skip to 5.3.
+- **Path B: a provider API key** (OpenAI, OpenRouter, LiteLLM, Ollama…). Do 5.1 and 5.2.
+
+### 5A. Subscriptions via CLIProxyAPI
+
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) logs into your subscriptions over OAuth
+and serves them as one OpenAI-compatible API on `http://127.0.0.1:8317/v1` — hx's default
+`base_url`.
+
+**Install** (Linux x64; use `linux_aarch64` on ARM, `windows_amd64.zip` on Windows):
+
+```bash
+set -eu
+TAG=$(curl -fsSL https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest \
+  | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+V=${TAG#v}
+mkdir -p "$HOME/.local/bin/cliproxy" && cd "$HOME/.local/bin/cliproxy"
+curl -fsSL "https://github.com/router-for-me/CLIProxyAPI/releases/download/$TAG/CLIProxyAPI_${V}_linux_amd64.tar.gz" | tar xz
+cp -n config.example.yaml config.yaml
+```
+
+**Configure `config.yaml`** (YAML, in that folder): set `server.host: "127.0.0.1"` (local only) and
+replace the example list under `access.api-keys` with ONE key you generate
+(`openssl rand -hex 24`). This key protects the proxy; hx sends it. Keep `server.port: 8317`.
+Never commit `config.yaml`.
+
+**Log in** (once per subscription; tokens go to `~/.cli-proxy-api/`):
+
+| Subscription | Command | Serves hx defaults |
+|---|---|---|
+| Claude Pro/Max | `./cli-proxy-api -claude-login` | `claude-sonnet-5-5`, `claude-opus-5-5` (implementer, manager, planner) |
+| ChatGPT Plus/Pro (Codex) | `./cli-proxy-api -codex-login` (headless/SSH: `-codex-device-login`) | `gpt-5.6-terra` (reviewer and all judges) |
+| Google Antigravity | `./cli-proxy-api -antigravity-login` | `gpt-oss-120b-medium`, `gemini-3-flash` (reader, researcher, panel judge) |
+
+Add `-no-browser` to print the login URL instead of opening a browser. Other providers exist
+(`-xai-login`, `-kimi-login`, …; see `./cli-proxy-api -h`).
+
+**Run it** (keep it running; a systemd user service is the easy way on Linux):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/cliproxy.service << EOF
+[Unit]
+Description=CLIProxyAPI (local)
+After=network-online.target
+[Service]
+WorkingDirectory=$HOME/.local/bin/cliproxy
+ExecStart=$HOME/.local/bin/cliproxy/cli-proxy-api -config $HOME/.local/bin/cliproxy/config.yaml
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload && systemctl --user enable --now cliproxy
+```
+
+**Give hx the proxy key:** `HX_PROXY_KEY` = the key you put in `access.api-keys` — export it in
+the shell rc, or put `HX_PROXY_KEY=...` in the project's `.env`.
+
+**Check:** `curl -s -H "Authorization: Bearer $HX_PROXY_KEY" http://127.0.0.1:8317/v1/models`
+lists the model ids of every subscription you logged into.
+
+**Missing a subscription?** The hard rule of 5.2 still holds: judges need a model outside the
+implementer's family. Without Codex, map the judge profiles (5.2 list) to, e.g., a Gemini model
+from Antigravity; without Antigravity, map `reader`/`researcher` to a model you have and set
+`panel_reviewer = []`. Use ids from the `/models` list above.
+
+**Re-auth:** the proxy refreshes tokens by itself. If a run fails with `503 auth_unavailable`, or
+`hx doctor` says a model is no longer offered, run that subscription's login command again.
+
+> Using a consumer subscription through a proxy may conflict with the provider's terms of use;
+> that choice and its risk are yours. Path B avoids it.
+
+### 5.1 Endpoint and key (Path B)
+
+Edit `.hx/config.toml` — change the existing tables instead of adding duplicates (a TOML table
+may appear only once). The generated config points at the proxy of Path A (`base_url` defaults to
+`http://127.0.0.1:8317/v1`, key variable `HX_PROXY_KEY`); replace it:
 
 ```toml
 [llm]
@@ -145,7 +222,7 @@ echo 'OPENAI_API_KEY=...' >> .env    # the user pastes the key; never echo it ba
 A keyless local server works, but `hx doctor` complains about an empty variable: set it to any
 dummy value.
 
-### 5.2 Models — every role must exist on your endpoint
+### 5.2 Models — every role must exist on your endpoint (Path B)
 
 hx uses several agent profiles, and some of them ship with the author's model names. Map **all**
 of them, or the run stops before spending anything with `o proxy não oferece nenhum modelo de …`
