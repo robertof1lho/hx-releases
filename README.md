@@ -69,48 +69,32 @@ This creates `.hx/config.toml` (the settings) plus a few support folders (`.ai/`
 
 ## 3. Connect your models
 
-Open `.hx/config.toml` and edit these tables (edit the existing ones; don't add duplicates):
-
-```toml
-[llm]
-base_url = "https://your-endpoint/v1"   # any OpenAI-compatible endpoint
-api_key_env = "MY_LLM_KEY"              # name of the environment variable that holds the key
-
-[models]
-main = "model-a"                        # writes the code
-panel_reviewer = []
-
-[models.profiles]                       # helper roles: use model-a
-manager = "model-a"
-planner = "model-a"
-reader = "model-a"
-researcher = "model-a"
-                                        # reviewer roles: use model-b
-reviewer = "model-b"
-completion-judge = "model-b"
-selection-judge = "model-b"
-proposal-arbiter = "model-b"
-security-reviewer = "model-b"
-silent-failure-hunter = "model-b"
-oracle = "model-b"
+```bash
+hx setup
 ```
 
-- **Two models are required.** The reviewer must be a different model from the one that writes
-  the code — ideally from another vendor. With a single model, review cannot run (use
-  `hx run --no-review`).
-- Use model ids exactly as your endpoint lists them (`GET <base_url>/models`).
-- hx recognizes the vendor from the id (`gpt…`, `claude…`, `gemini…`, `llama…`, `qwen…`,
-  `mistral…`, `deepseek…`). For other ids, declare it:
-  `[model_families]` `"my-model*" = "openai"`.
-- The endpoint must support chat completions with tool calling.
+It asks for the endpoint URL (any OpenAI-compatible endpoint with tool calling), the API key
+(saved to the project's `.env`, which is git-ignored; never shown), and two models picked from
+the endpoint's list:
 
-Put the key in a `.env` file in the project (already git-ignored):
+- **main** — writes the code;
+- **judge** — reviews it. It must be a different model, ideally from another vendor; setup
+  suggests one.
 
+On Linux x64 it also offers a sandbox for the commands the agent runs; accept it (it needs the
+`bubblewrap` package, and setup tells you how to install it if missing).
+
+Without prompts (scripts, agents):
+
+```bash
+hx setup --llm-url https://your-endpoint/v1 --llm-key-env MY_LLM_KEY \
+  --model <main-model> --judge-model <judge-model> --sandbox --yes
 ```
-MY_LLM_KEY=...
-```
 
-**Set your checks.** If `hx init` did not detect your test command, add it:
+Then put the key in the project's `.env` as `MY_LLM_KEY=...`. Add `--global` to save these
+settings for every project. Use model ids exactly as `GET <base_url>/models` lists them.
+
+**Set your checks.** If `hx init` did not detect your test command, add it to `.hx/config.toml`:
 
 ```toml
 [[validation.gates]]
@@ -127,13 +111,14 @@ allow_commands = ["npm install"]
 
 ## 4. Check
 
+`hx setup` ends by running the check; run it again any time:
+
 ```bash
 hx doctor
 ```
 
 Ready when it exits with code 0 and prints no line starting with `hx doctor:`. Each such line says
-what is missing (messages are in Portuguese): an empty key variable, an endpoint that does not
-answer, a model the endpoint does not offer, or no checks configured.
+what is missing and how to fix it (messages are in Portuguese).
 
 ## 5. Use
 
@@ -151,6 +136,7 @@ hx implements, runs your checks, reviews, and prints a summary. Details of each 
 | `hx check` | run your checks |
 | `hx review --diff main..HEAD` | review existing changes |
 | `hx observatorio` | dashboard of runs in the terminal |
+| `hx help` | all commands |
 | `hx` | interactive mode |
 
 In scripts, always pass a command (plain `hx` opens the interactive mode).
@@ -164,6 +150,6 @@ project, `hx upgrade` refreshes the project files without overwriting your edits
 
 | Problem | Fix |
 |---|---|
-| `backend não declarado` | add `[operations]` with `backend = "local"` to `.hx/config.toml` |
-| review stops with `sem modelo permitido` | the reviewer roles need a model different from `main` (step 3) |
+| `backend não declarado` | run `hx setup --sandbox`, or add `[operations]` with `backend = "local"` to `.hx/config.toml` |
+| review stops with `sem modelo permitido` | run `hx setup` again with a different `--judge-model` |
 | spending limit never triggers | declare prices: `[prices]` `"model-a" = { input = 3.0, output = 15.0 }` (USD per 1M tokens) |
